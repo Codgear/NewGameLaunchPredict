@@ -176,6 +176,9 @@ window.Sim = (function () {
     }
   }
 
+  /* 上架子集评估的缓存（analyze 后失效重建） */
+  let SUB = null;
+
   /* 第四步：重叠度匹配 + 转化预估 */
   function analyze(days, periodLabel) {
     const K = S.games.length;
@@ -256,12 +259,171 @@ window.Sim = (function () {
     });
 
     S.result = res;
+    SUB = null;          // 结果已变化，子集评估缓存失效
     return res;
+  }
+
+  /* ================= 上架组合建议 =================
+   * 任意候选子集的上架效果都可以精确重算：
+   *   对子集 S 内的玩法 i，把「周期内活跃的潜在受众」拆成三类
+   *     live  = 被存量玩法占据（与 S 无关，固定）
+   *     batch = 落在 S 内其他玩法潜在受众里（随 S 变化）
+   *     free  = 剩余
+   *   新进 = free×2r + live×0.8r + batch×0.6r + 长尾×0.2r
+   * 为支持 2^8 种子集枚举，先按 pmask×存量归属 做人数分布统计，
+   * 每个子集只需在 256 个 mask 上累加，避免反复扫全量玩家。
+   */
+
+  function ensureSubsetStats() {
+    if (SUB) return SUB;
+    const cnt0 = new Int32Array(256);   // 未被存量占据
+    const cntL = new Int32Array(256);   // 被存量玩法占据
+    for (let i = 0; i < N; i++) {
+      if (!S.active[i]) continue;
+      const m = S.pmask[i] & 255;
+      if (!m) continue;
+      if (S.occIdx[i] > 0) cntL[m]++; else cnt0[m]++;
+    }
+    const K = S.games.length;
+    const pot0 = new Array(K).fill(0), live = new Array(K).fill(0);
+    for (let gi = 0; gi < K; gi++) {
+      const bi = 1 << gi;
+      for (let m = 0; m < 256; m++) {
+        if (!(m & bi)) continue;
+        pot0[gi] += cnt0[m]; live[gi] += cntL[m];
+      }
+    }
+    SUB = { cnt0: cnt0, cntL: cntL, pot0: pot0, live: live, K: K };
+    return SUB;
+  }
+
+  function rates(g) {
+    return [Math.min(0.9, g.cvr * 2), Math.min(0.9, g.cvr * 0.8),
+      Math.min(0.9, g.cvr * 0.6), Math.min(0.9, g.cvr * 0.2)];
+  }
+
+  /* 评估一个上架子集（bitmask），返回每个玩法的人群拆分与新进 */
+  function evalMask(M) {
+    const st = ensureSubsetStats();
+    const other = S.result ? S.result.otherActive : 0;
+    const out = [];
+    for (let gi = 0; gi < st.K; gi++) {
+      const bi = 1 << gi;
+      if (!(M & bi)) continue;
+      const others = M & ~bi;
+      let batch = 0;
+      for (let m = 0; m < 256; m++) {
+        if (!(m & bi)) continue;
+        if (m & others) batch += st.cnt0[m];
+      }
+      const g = S.games[gi], r = rates(g);
+      const free = st.pot0[gi] - batch;
+      out.push({
+        idx: gi, free: free, live: st.live[gi], batch: batch,
+        conv: free * r[0] + st.live[gi] * r[1] + batch * r[2] + other * r[3]
+      });
+    }
+    return out;
+  }
+
+  /* 玩法 j 的潜在受众中，同时落在核心玩法里的活跃人数（判断“挤占”用） */
+  function overlapWithCore(j, coreMask) {
+    const st = ensureSubsetStats();
+    if (!coreMask) return 0;
+    const bj = 1 << j;
+    let n = 0;
+    for (let m = 0; m < 256; m++) {
+      if (!(m & bj)) continue;
+      if (m & coreMask) n += st.cnt0[m] + st.cntL[m];
+    }
+    return n;
+  }
+
+  /**
+   * @param {number[]} coreIdx    核心玩法下标（可空）
+   * @param {number}   targetRate 核心玩法的达成率下限（0~1）
+   */
+  function advise(coreIdx, targetRate) {
+    ensureSubsetStats();
+    const K = SUB.K;
+    const other = S.result.otherActive;
+    let coreMask = 0;
+    (coreIdx || []).forEach(function (i) { if (i >= 0 && i < K) coreMask |= (1 << i); });
+
+    // 单独上架（理想上限）作为达标基准
+    const solo = [];
+    for (let gi = 0; gi < K; gi++) solo.push(evalMask(1 << gi)[0].conv);
+
+    const fullRows = evalMask((1 << K) - 1);
+    const fullConv = fullRows.reduce(function (a, r) { return a + r.conv; }, 0);
+
+    const isCore = function (i) { return !!(coreMask & (1 << i)); };
+    const rateOf = function (r) { return r.conv / Math.max(1, solo[r.idx]); };
+
+    let best = null, maxSet = null, fallback = null;
+    const pool = [];
+
+    for (let M = 1; M < (1 << K); M++) {
+      if ((M & coreMask) !== coreMask) continue;
+      const rows = evalMask(M);
+      const coreRows = rows.filter(function (r) { return isCore(r.idx); });
+      const minRate = coreRows.length
+        ? Math.min.apply(null, coreRows.map(rateOf)) : 1;
+      const sum = rows.reduce(function (a, r) { return a + r.conv; }, 0);
+      const item = { mask: M, size: rows.length, rows: rows, sum: sum, minRate: minRate,
+        coreRates: coreRows.map(function (r) { return { idx: r.idx, rate: rateOf(r) }; }) };
+
+      // 距离约束最近的方案（不可行时兜底）
+      if (!fallback || minRate > fallback.minRate + 1e-9 ||
+        (Math.abs(minRate - fallback.minRate) < 1e-9 && sum > fallback.sum)) fallback = item;
+
+      if (minRate + 1e-9 < targetRate) continue;
+      pool.push(item);
+      if (!best || sum > best.sum + 1e-9 ||
+        (Math.abs(sum - best.sum) < 1e-9 && item.size > best.size)) best = item;
+      if (!maxSet || item.size > maxSet.size ||
+        (item.size === maxSet.size && sum > maxSet.sum + 1e-9)) maxSet = item;
+    }
+
+    pool.sort(function (a, b) { return b.sum - a.sum; });
+    const top = pool.slice(0, 3);
+
+    // 核心玩法两两同时上架时的达成率（用于冲突提示）
+    const conflicts = [];
+    const coreList = [];
+    for (let i = 0; i < K; i++) if (isCore(i)) coreList.push(i);
+    for (let a = 0; a < coreList.length; a++) {
+      for (let b = a + 1; b < coreList.length; b++) {
+        const i = coreList[a], j = coreList[b];
+        const rows = evalMask((1 << i) | (1 << j));
+        const ri = rows.filter(function (r) { return r.idx === i; })[0];
+        const rj = rows.filter(function (r) { return r.idx === j; })[0];
+        conflicts.push({
+          i: i, j: j, rateI: rateOf(ri), rateJ: rateOf(rj),
+          overlapI: ri.batch, overlapJ: rj.batch,
+          minRate: Math.min(rateOf(ri), rateOf(rj))
+        });
+      }
+    }
+    conflicts.sort(function (a, b) { return a.minRate - b.minRate; });
+
+    return {
+      K: K, coreMask: coreMask, coreList: coreList, coreCount: coreList.length, targetRate: targetRate,
+      solo: solo, fullConv: fullConv, fullRows: fullRows,
+      feasible: !!best,
+      best: best || fallback,          // 无可行解时给最接近的方案
+      maxSet: maxSet,
+      top: top.length ? top : (fallback ? [fallback] : []),
+      fallback: fallback,
+      conflicts: conflicts,
+      overlapOf: function (j) { return overlapWithCore(j, coreMask); }
+    };
   }
 
   return {
     SCALE, N, CLUSTERS, EXISTING, LVL_NAME, S, TEMPLATES,
     buildUniverse, score, topThreshold, makeGame, recall, buildActive, analyze,
+    evalMask, advise,
     fmt: function (n) { return (n * SCALE).toLocaleString('zh-CN'); },
     raw: function (n) { return Math.round(n * SCALE); }
   };

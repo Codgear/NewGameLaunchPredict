@@ -335,3 +335,29 @@ tr.total td{background:rgba(124,108,255,.1);color:#fff;font-weight:650}
 .game-title span .pid{font-size:9px;line-height:13px;vertical-align:0;margin-left:0;margin-right:6px}
 .parse-hint .warn-line{color:#f5b74a;font-size:10.5px;margin-top:3px}
 td.mono{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:var(--txt-3);white-space:nowrap}
+
+/* ---------- 上架建议 ---------- */
+.adv-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.adv-label{font-size:11px;color:var(--txt-3);min-width:62px;flex:none}
+.adv-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0 12px}
+.adv-verdict{border:1px solid var(--line);border-radius:12px;padding:12px 14px;
+  background:rgba(255,255,255,.02)}
+.adv-verdict.hl{background:linear-gradient(160deg,rgba(124,108,255,.2),rgba(18,26,43,.9));
+  border-color:rgba(124,108,255,.42)}
+.av-label{font-size:11px;color:var(--txt-3);letter-spacing:.2px}
+.av-val{font-size:22px;font-weight:700;margin-top:4px;letter-spacing:-.3px;font-variant-numeric:tabular-nums}
+.adv-verdict.hl .av-val{color:#c9c4ff}
+.av-sub{font-size:10.5px;color:var(--txt-3);margin-top:5px;line-height:1.7}
+.adv-warn{margin-top:10px;padding:10px 12px;border-radius:10px;font-size:11px;line-height:1.75;
+  background:rgba(245,165,36,.09);border:1px solid rgba(245,165,36,.28);color:#eec483}
+.adv-warn b{color:#f7d9a5;font-weight:600}
+.adv-alt{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+.adv-alt .alt{display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--txt-3);
+  border:1px solid var(--line);border-radius:9px;padding:6px 10px;background:rgba(255,255,255,.025)}
+.adv-alt .alt b{color:var(--txt);font-size:11.5px}
+.adv-alt .alt i{font-style:normal;color:var(--txt-3);opacity:.85}
+.mini-table tr.is-core td{background:rgba(124,108,255,.07)}
+.chip .pid{font-size:8.5px;line-height:13px;padding:0 3px;margin-left:5px;vertical-align:0;
+  background:rgba(255,255,255,.06);border-color:var(--line);color:var(--txt-3)}
+.chip.is-active .pid{background:rgba(124,108,255,.18);border-color:rgba(124,108,255,.4);color:#cfcbff}
+@media (max-width:980px){.adv-grid{grid-template-columns:1fr}}

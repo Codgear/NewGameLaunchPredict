@@ -13,7 +13,8 @@
 
   const A = {
     step: 1, maxStep: 1, games: [], seedsReady: false, activeReady: false,
-    matched: false, days: 7, start: null, end: null, result: null, open: 0, running: false
+    matched: false, days: 7, start: null, end: null, result: null, open: 0, running: false,
+    core: [], coreTouched: false, targetRate: 0.95, advice: null
   };
 
   const fmtNum = function (n) { return Math.round(n * Sim.SCALE).toLocaleString('zh-CN'); };
@@ -229,6 +230,7 @@
     // 保证模板分散
     const used = new Set();
     A.games = list.map(function (x, i) { return Sim.makeGame(x, i, used); });
+    A.core = []; A.coreTouched = false;   // 玩法列表变了，核心标记与建议需重算
     $('#seedStatus').className = 'tag run'; $('#seedStatus').textContent = '拉取中…';
     $('#seedBody').innerHTML = '<div class="seed-row">' + A.games.map(function (g) {
       return '<div class="skel" style="height:38px"></div>';
@@ -483,6 +485,8 @@
           '<div class="k-val">' + k[1] + '</div><div class="k-sub">' + k[2] + '</div></div>';
       }).join('') + '</div>',
 
+      '<div id="adviceBox"></div>',
+
       '<div class="card">',
       '  <div class="card-head"><h2>各玩法受众重叠与转化预估</h2>',
       '    <div class="legend"><span><em style="background:var(--free)"></em>未被占据</span>' +
@@ -517,7 +521,182 @@
     renderMatrix();
     renderExisting();
     bindGames();
+    if (!A.core.length && !A.coreTouched && res.games.length) {
+      // 默认把预估新进最高的玩法设为核心，便于直接给出建议
+      let mi = 0;
+      res.games.forEach(function (g, i) { if (g.convTotal > res.games[mi].convTotal) mi = i; });
+      A.core = [mi];
+    }
+    refreshAdvice();
     if (A.open !== null) toggleGame(A.open, true);
+  }
+
+  /* ================= 上架建议 ================= */
+  const fmtW = function (n) {
+    const v = Math.round(n * Sim.SCALE);
+    return v >= 10000 ? (v / 10000).toFixed(1) + ' 万' : v.toLocaleString('zh-CN');
+  };
+
+  function refreshAdvice() {
+    const res = A.result, box = $('#adviceBox');
+    if (!res || !box) return;
+    const adv = Sim.advise(A.core, A.targetRate);
+    A.advice = adv;
+    box.innerHTML = adviceHTML(adv);
+    bindAdvice();
+  }
+
+  function adviceHTML(adv) {
+    const res = A.result, K = adv.K;
+    const nameOf = function (i) { return res.games[i].name; };
+    const idleName = function (i) {
+      return '<b>' + esc(res.games[i].name) + '</b><span class="pid">' + esc(res.games[i].id) + '</span>';
+    };
+
+    const coreChips = res.games.map(function (g, i) {
+      const on = A.core.indexOf(i) >= 0;
+      return '<button class="chip' + (on ? ' is-active' : '') + '" data-core="' + i + '">' +
+        (on ? '★ ' : '') + esc(g.name) + '</button>';
+    }).join('');
+
+    const rateChips = [0.9, 0.95, 1].map(function (r) {
+      const on = Math.abs(A.targetRate - r) < 1e-9;
+      return '<button class="chip' + (on ? ' is-active' : '') + '" data-rate="' + r + '">≥ ' + Math.round(r * 100) + '%</button>';
+    }).join('');
+
+    // 结论一：最多上架几个
+    const maxN = adv.maxSet ? adv.maxSet.size : 0;
+    const fullCoreRate = Math.min.apply(null, adv.fullRows
+      .filter(function (r) { return adv.coreMask & (1 << r.idx); })
+      .map(function (r) { return r.conv / Math.max(1, adv.solo[r.idx]); }).concat([1]));
+    let capVal, capSub;
+    if (!adv.coreCount) {
+      capVal = K + ' 个';
+      capSub = '未标记核心玩法，当前无达标约束；标记核心后可按「核心新进达标」反推上限';
+    } else if (!adv.feasible) {
+      capVal = '— 无解';
+      capSub = '核心玩法之间互相挤占，连只上核心都达不到目标的 ' + fmtPct(adv.targetRate, 0) +
+        '（最高仅 ' + fmtPct(adv.fallback ? adv.fallback.minRate : 0) + '），需错峰上架或减少核心';
+    } else if (maxN >= K) {
+      capVal = '全部 ' + K + ' 个';
+      capSub = '全量上架时核心最低达成 ' + fmtPct(fullCoreRate) + '，仍满足目标，无需削减';
+    } else {
+      capVal = maxN + ' 个';
+      capSub = '再增加 1 个玩法，核心「' + nameOf(adv.coreList[0]) + '」等的新进就会低于目标的 ' +
+        fmtPct(adv.targetRate, 0) + '；全量 ' + K + ' 个上架时核心最低仅 ' + fmtPct(fullCoreRate);
+    }
+
+    // 结论二：推荐组合
+    const best = adv.best;
+    const bestRows = best.rows.slice().sort(function (a, b) {
+      const ca = (adv.coreMask & (1 << a.idx)) ? 1 : 0, cb = (adv.coreMask & (1 << b.idx)) ? 1 : 0;
+      if (ca !== cb) return cb - ca;
+      return b.conv - a.conv;
+    });
+    const bestTotal = bestRows.reduce(function (a, r) { return a + r.conv; }, 0);
+
+    let recVal, recSub;
+    if (!adv.feasible) {
+      recVal = '无达标组合';
+      recSub = '核心玩法之间重叠过多，任何组合都无法同时让全部核心达标，见下方冲突提示';
+    } else {
+      recVal = best.size + ' 个玩法';
+      recSub = (adv.coreCount ? '核心最低达成 ' + fmtPct(best.minRate) + ' · ' : '') +
+        '组合总新进 ' + fmtW(bestTotal) +
+        (adv.coreCount && adv.coreCount < best.size
+          ? ' · 含 ' + adv.coreCount + ' 个核心 + ' + (best.size - adv.coreCount) + ' 个搭配' : '');
+    }
+
+    const bodyRows = bestRows.map(function (r) {
+      const g = res.games[r.idx];
+      const isCore = !!(adv.coreMask & (1 << r.idx));
+      const rate = r.conv / Math.max(1, adv.solo[r.idx]);
+      const ov = isCore ? null : adv.overlapOf(r.idx);
+      return '<tr' + (isCore ? ' class="is-core"' : '') + '>' +
+        '<td class="k">' + esc(g.name) + '</td>' +
+        '<td class="mono">' + esc(g.id) + '</td>' +
+        '<td>' + (isCore ? '<span class="tag ok">核心</span>' : '<span class="tag">' + (adv.coreCount ? '搭配' : '候选') + '</span>') + '</td>' +
+        '<td class="r">' + fmtNum(g.potActive) + '</td>' +
+        '<td class="r"><b>' + fmtNum(r.conv) + '</b></td>' +
+        '<td class="r"' + (isCore && rate < A.targetRate - 1e-9 ? ' style="color:var(--live)"' : '') + '>' +
+        fmtPct(rate) + '</td>' +
+        '<td class="r">' + (isCore ? '—' : (ov > 0 ? fmtNum(ov) : '0')) + '</td></tr>';
+    }).join('');
+
+    const alts = adv.top.filter(function (t) { return !best || t.mask !== best.mask; }).slice(0, 2)
+      .map(function (t) {
+        const names = t.rows.slice().sort(function (a, b) { return b.conv - a.conv; })
+          .map(function (r) { return res.games[r.idx].name; }).join('、');
+        return '<div class="alt"><b>' + t.size + ' 个</b><span>核心最低 ' + fmtPct(t.minRate) +
+          ' · 总新进 ' + fmtW(t.sum) + '</span><i>' + esc(names) + '</i></div>';
+      }).join('');
+
+    // 冲突提示
+    let warn = '';
+    if (!adv.feasible && adv.conflicts.length) {
+      const c = adv.conflicts[0];
+      warn = '<div class="adv-warn"><b>核心玩法互相挤占</b>：' + idleName(c.i) + ' 与 ' + idleName(c.j) +
+        ' 的周期活跃潜在受众重叠 <b>' + fmtNum(c.overlapI) + '</b> 人，同批上架会让前者的新进降到单独上架时的 ' +
+        fmtPct(c.rateI) + '（后者 ' + fmtPct(c.rateJ) + '）。建议错峰上架，或只保留一个作为核心；' +
+        '下方给出的是最接近目标的方案。</div>';
+    } else if (adv.coreCount && maxN < K) {
+      warn = '<div class="adv-warn"><b>不宜全量铺开</b>：' + K + ' 个玩法同时上架时核心最低达成仅 ' +
+        fmtPct(fullCoreRate) + '。建议按推荐组合分批上架，先保核心玩法的新进目标。</div>';
+    }
+
+    const coreTip = adv.coreCount === 0
+      ? '<div class="adv-warn">未标记核心玩法：当前建议按「总新进最大」给出。点击上方玩法标签可设为核心（可多选），将改为在核心达标前提下的组合建议。</div>'
+      : '';
+
+    return [
+      '<div class="card">',
+      '  <div class="card-head"><h2>上架建议</h2><span class="hint">根据各玩法周期预估新进，反推最多上架数量与最优组合</span></div>',
+      '  <div class="adv-row"><span class="adv-label">核心玩法</span><div class="chips" id="coreChips">' + coreChips + '</div></div>',
+      '  <div class="adv-row"><span class="adv-label">达标要求</span><div class="chips" id="rateChips">' + rateChips +
+      '</div><span class="hint">核心玩法周期新进 ≥ 单独上架时的该比例</span></div>',
+      coreTip,
+      '  <div class="adv-grid">',
+      '    <div class="adv-verdict"><div class="av-label">① 最多可同时上架</div><div class="av-val">' + capVal +
+      '</div><div class="av-sub">' + capSub + '</div></div>',
+      '    <div class="adv-verdict hl"><div class="av-label">② 推荐上架组合</div><div class="av-val">' + recVal +
+      '</div><div class="av-sub">' + recSub + '</div></div>',
+      '  </div>',
+      !adv.feasible ? '<div class="adv-warn" style="margin:0 0 8px">下表为<b>最接近目标</b>的方案（核心最低 ' +
+        fmtPct(best.minRate) + '，未达标），可据此调整上架数量或错峰时间。</div>' : '',
+      '  <div class="mini-table"><table><thead><tr><th>玩法</th><th>玩法ID</th><th>角色</th>' +
+      '<th class="r">周期潜在受众</th><th class="r">预估新进</th><th class="r">相对单独上架</th>' +
+      '<th class="r">与核心重叠</th></tr></thead><tbody>' + bodyRows + '</tbody></table></div>',
+      alts ? '<div class="adv-alt"><span class="adv-label" style="min-width:auto">备选组合</span>' + alts + '</div>' : '',
+      warn,
+      '  <div class="note">算法口径：对每个候选子集，把各玩法的周期活跃潜在受众重新拆成「被存量占据 / 与本次上架的其他玩法重叠 / 自由可触达」三类，再按 2r、0.8r、0.6r、0.2r 加权求新进；' +
+      '「单独上架」= 该玩法独占全部自由人群时的理论上限，作为核心达标基准。共枚举 ' +
+      Math.pow(2, K) + ' 种组合（要求包含全部核心玩法）。</div>',
+      '</div>'
+    ].join('');
+  }
+
+  function bindAdvice() {
+    const cc = $('#coreChips');
+    if (cc) {
+      cc.addEventListener('click', function (e) {
+        const b = e.target.closest('[data-core]');
+        if (!b) return;
+        const i = +b.getAttribute('data-core');
+        const k = A.core.indexOf(i);
+        if (k >= 0) A.core.splice(k, 1); else A.core.push(i);
+        A.coreTouched = true;
+        refreshAdvice();
+      });
+    }
+    const rc = $('#rateChips');
+    if (rc) {
+      rc.addEventListener('click', function (e) {
+        const b = e.target.closest('[data-rate]');
+        if (!b) return;
+        A.targetRate = +b.getAttribute('data-rate');
+        refreshAdvice();
+      });
+    }
   }
 
   function renderGame(g, idx) {
