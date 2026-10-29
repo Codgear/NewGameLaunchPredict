@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>新玩法受众重叠分析台 · DEMO</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="brand">
+      <div class="brand-mark">AO</div>
+      <div class="brand-text"><strong>Audience Overlap</strong><span>新玩法上架前预估 · DEMO</span></div>
+    </div>
+    <nav class="steps" id="stepNav"></nav>
+    <div class="rail-foot">
+      <div class="rail-note">数据口径</div>
+      <p>大盘近 90 天活跃池 520 万<br />内部模拟样本 26 万 × 20 倍外扩</p>
+      <div class="rail-tag">离线演示数据 · 无真实用户信息</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="crumb" id="crumb">第 1 步 / 共 4 步</div>
+        <h1 id="pageTitle">上传目标玩法列表</h1>
+      </div>
+      <div class="topbar-right">
+        <button class="btn ghost sm" id="btnReset">重置</button>
+        <span class="badge">DEMO</span>
+      </div>
+    </header>
+
+    <div class="viewport">
+      <section class="step is-active" id="step-1"></section>
+      <section class="step" id="step-2"></section>
+      <section class="step" id="step-3"></section>
+      <section class="step" id="step-4"></section>
+    </div>
+
+    <footer class="bottom">
+      <span class="muted" id="statusBar">尚未开始</span>
+      <div class="bottom-actions">
+        <button class="btn ghost" id="btnPrev">上一步</button>
+        <button class="btn primary" id="btnNext">下一步</button>
+      </div>
+    </footer>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="js/sim.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
