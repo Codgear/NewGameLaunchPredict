@@ -17,6 +17,9 @@
     core: [], coreTouched: false, targetRate: 0.95, advice: null
   };
 
+  /* 核心玩法达标率可选档位 */
+  const RATE_OPTS = [0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1];
+
   const fmtNum = function (n) { return Math.round(n * Sim.SCALE).toLocaleString('zh-CN'); };
   const fmtPct = function (x, d) { const v = (x * 100); return v.toFixed(d === undefined ? 1 : d) + '%'; };
   const fmtRate = function (x) { return (x * 100).toFixed(2) + '%'; };
@@ -559,7 +562,7 @@
         (on ? '★ ' : '') + esc(g.name) + '</button>';
     }).join('');
 
-    const rateChips = [0.9, 0.95, 1].map(function (r) {
+    const rateChips = RATE_OPTS.map(function (r) {
       const on = Math.abs(A.targetRate - r) < 1e-9;
       return '<button class="chip' + (on ? ' is-active' : '') + '" data-rate="' + r + '">≥ ' + Math.round(r * 100) + '%</button>';
     }).join('');
